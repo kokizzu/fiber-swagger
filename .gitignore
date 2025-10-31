@@ -12,4 +12,5 @@
 *.out
 
 # Dependency directories (remove the comment below to include it)
+# Keep vendored dependencies out of version control
 vendor/

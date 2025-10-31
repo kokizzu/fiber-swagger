@@ -1,16 +1,17 @@
 package swagger
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
-	"net/http"
+	"io"
+	"io/fs"
 	"path"
 	"strings"
 	"sync"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/filesystem"
-	"github.com/gofiber/fiber/v2/utils"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/utils/v2"
 	swaggerFiles "github.com/swaggo/files/v2"
 	"github.com/swaggo/swag"
 )
@@ -32,50 +33,82 @@ func New(config ...Config) fiber.Handler {
 	}
 
 	var (
-		prefix string
-		once   sync.Once
-		fs     = filesystem.New(filesystem.Config{Root: http.FS(swaggerFiles.FS)})
+		basePrefix string
+		once       sync.Once
 	)
 
-	return func(c *fiber.Ctx) error {
-		// Set prefix
-		once.Do(
-			func() {
-				prefix = strings.ReplaceAll(c.Route().Path, "*", "")
+	return func(c fiber.Ctx) error {
+		once.Do(func() {
+			basePrefix = strings.ReplaceAll(c.Route().Path, "*", "")
+		})
 
-				forwardedPrefix := getForwardedPrefix(c)
-				if forwardedPrefix != "" {
-					prefix = forwardedPrefix + prefix
-				}
+		prefix := basePrefix
+		if forwardedPrefix := getForwardedPrefix(c); forwardedPrefix != "" {
+			prefix = forwardedPrefix + prefix
+		}
 
-				// Set doc url
-				if len(cfg.URL) == 0 {
-					cfg.URL = path.Join(prefix, defaultDocURL)
-				}
-			},
-		)
+		cfgCopy := cfg
+		if len(cfgCopy.URL) == 0 {
+			cfgCopy.URL = path.Join(prefix, defaultDocURL)
+		}
 
 		p := c.Path(utils.CopyString(c.Params("*")))
 
 		switch p {
 		case defaultIndex:
 			c.Type("html")
-			return index.Execute(c, cfg)
+			return index.Execute(c, cfgCopy)
 		case defaultDocURL:
 			var doc string
-			if doc, err = swag.ReadDoc(cfg.InstanceName); err != nil {
+			if doc, err = swag.ReadDoc(cfgCopy.InstanceName); err != nil {
 				return err
 			}
 			return c.Type("json").SendString(doc)
 		case "", "/":
-			return c.Redirect(path.Join(prefix, defaultIndex), fiber.StatusMovedPermanently)
+			return c.Redirect().Status(fiber.StatusMovedPermanently).To(path.Join(prefix, defaultIndex))
 		default:
-			return fs(c)
+			filePath := path.Clean("/" + p)
+			filePath = strings.TrimPrefix(filePath, "/")
+			if filePath == "" {
+				return fiber.ErrNotFound
+			}
+
+			file, err := swaggerFiles.FS.Open(filePath)
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return fiber.ErrNotFound
+				}
+				return err
+			}
+			defer file.Close()
+
+			info, err := file.Stat()
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return fiber.ErrNotFound
+				}
+				return err
+			}
+
+			if info.IsDir() {
+				return fiber.ErrNotFound
+			}
+
+			data, err := io.ReadAll(file)
+			if err != nil {
+				return err
+			}
+
+			if ext := strings.TrimPrefix(path.Ext(filePath), "."); ext != "" {
+				c.Type(ext)
+			}
+
+			return c.Send(data)
 		}
 	}
 }
 
-func getForwardedPrefix(c *fiber.Ctx) string {
+func getForwardedPrefix(c fiber.Ctx) string {
 	header := c.GetReqHeaders()["X-Forwarded-Prefix"]
 
 	if len(header) == 0 {

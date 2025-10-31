@@ -1,11 +1,12 @@
 package swagger
 
 import (
+	"mime"
 	"net/http"
 	"sync"
 	"testing"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/swaggo/swag"
 )
 
@@ -104,8 +105,12 @@ func Test_Swagger(t *testing.T) {
 
 			if tt.contentType != "" {
 				ct := resp.Header.Get("Content-Type")
-				if ct != tt.contentType {
-					t.Fatalf(`Content-Type: got %s - expected %s`, ct, tt.contentType)
+				mediaType, _, err := mime.ParseMediaType(ct)
+				if err != nil {
+					t.Fatalf("invalid content type %q: %v", ct, err)
+				}
+				if mediaType != tt.contentType {
+					t.Fatalf(`Content-Type: got %s - expected %s`, mediaType, tt.contentType)
 				}
 			}
 
