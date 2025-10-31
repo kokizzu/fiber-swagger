@@ -1,14 +1,16 @@
 package swagger
 
 import (
+	"errors"
 	"fmt"
 	"html/template"
+	"io"
+	"io/fs"
 	"path"
 	"strings"
 	"sync"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/gofiber/fiber/v3/middleware/static"
 	"github.com/gofiber/utils/v2"
 	swaggerFiles "github.com/swaggo/files/v2"
 	"github.com/swaggo/swag"
@@ -33,7 +35,6 @@ func New(config ...Config) fiber.Handler {
 	var (
 		basePrefix string
 		once       sync.Once
-		fs         = static.New("", static.Config{FS: swaggerFiles.FS})
 	)
 
 	return func(c fiber.Ctx) error {
@@ -66,7 +67,43 @@ func New(config ...Config) fiber.Handler {
 		case "", "/":
 			return c.Redirect().Status(fiber.StatusMovedPermanently).To(path.Join(prefix, defaultIndex))
 		default:
-			return fs(c)
+			filePath := path.Clean("/" + p)
+			filePath = strings.TrimPrefix(filePath, "/")
+			if filePath == "" {
+				return fiber.ErrNotFound
+			}
+
+			file, err := swaggerFiles.FS.Open(filePath)
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return fiber.ErrNotFound
+				}
+				return err
+			}
+			defer file.Close()
+
+			info, err := file.Stat()
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					return fiber.ErrNotFound
+				}
+				return err
+			}
+
+			if info.IsDir() {
+				return fiber.ErrNotFound
+			}
+
+			data, err := io.ReadAll(file)
+			if err != nil {
+				return err
+			}
+
+			if ext := strings.TrimPrefix(path.Ext(filePath), "."); ext != "" {
+				c.Type(ext)
+			}
+
+			return c.Send(data)
 		}
 	}
 }
