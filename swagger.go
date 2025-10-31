@@ -31,38 +31,35 @@ func New(config ...Config) fiber.Handler {
 	}
 
 	var (
-		prefix string
-		once   sync.Once
-		fs     = static.New("", static.Config{FS: swaggerFiles.FS})
+		basePrefix string
+		once       sync.Once
+		fs         = static.New("", static.Config{FS: swaggerFiles.FS})
 	)
 
 	return func(c fiber.Ctx) error {
-		// Set prefix
-		once.Do(
-			func() {
-				prefix = strings.ReplaceAll(c.Route().Path, "*", "")
+		once.Do(func() {
+			basePrefix = strings.ReplaceAll(c.Route().Path, "*", "")
+		})
 
-				forwardedPrefix := getForwardedPrefix(c)
-				if forwardedPrefix != "" {
-					prefix = forwardedPrefix + prefix
-				}
+		prefix := basePrefix
+		if forwardedPrefix := getForwardedPrefix(c); forwardedPrefix != "" {
+			prefix = forwardedPrefix + prefix
+		}
 
-				// Set doc url
-				if len(cfg.URL) == 0 {
-					cfg.URL = path.Join(prefix, defaultDocURL)
-				}
-			},
-		)
+		cfgCopy := cfg
+		if len(cfgCopy.URL) == 0 {
+			cfgCopy.URL = path.Join(prefix, defaultDocURL)
+		}
 
-		p := utils.CopyString(c.Params("*"))
+		p := c.Path(utils.CopyString(c.Params("*")))
 
 		switch p {
 		case defaultIndex:
 			c.Type("html")
-			return index.Execute(c, cfg)
+			return index.Execute(c, cfgCopy)
 		case defaultDocURL:
 			var doc string
-			if doc, err = swag.ReadDoc(cfg.InstanceName); err != nil {
+			if doc, err = swag.ReadDoc(cfgCopy.InstanceName); err != nil {
 				return err
 			}
 			return c.Type("json").SendString(doc)
